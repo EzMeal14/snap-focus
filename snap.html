@@ -1,0 +1,207 @@
+<div id="snap-root" style="--bg:#1A1712; --brass:#C9A227; --brass-dim:#6B5A26; --paper:#EDE3CC; --soft:#8A8070; --miss:#B8503A; font-family: 'JetBrains Mono', 'Courier New', monospace; color: var(--paper); max-width: 360px; margin: 0 auto; background: var(--bg); border-radius: 18px; padding: 22px 20px; text-align: center;">
+<style>
+#snap-root * { box-sizing: border-box; }
+#snap-root button { font-family: inherit; }
+#snap-root #snap-canvas { touch-action: manipulation; cursor: pointer; }
+#snap-root .eyebrow { font-size: 10px; letter-spacing: 2px; color: var(--soft); text-transform: uppercase; }
+#snap-root .stat-val { font-size: 18px; font-weight: 700; color: var(--paper); }
+#snap-root .stat-label { font-size: 9px; letter-spacing: 1px; color: var(--soft); text-transform: uppercase; }
+#snap-root .link-btn { background: none; border: none; color: var(--soft); font-size: 11px; letter-spacing: 0.5px; cursor: pointer; text-decoration: underline; text-underline-offset: 3px; padding: 4px; }
+#snap-root .link-btn:hover { color: var(--paper); }
+</style>
+
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap">
+
+<div class="eyebrow">reflex focus</div>
+<div style="font-size: 17px; font-weight: 700; margin: 2px 0 16px;">Snap</div>
+
+<canvas id="snap-canvas" width="280" height="280" style="max-width: 100%;"></canvas>
+
+<div id="snap-fstop" style="font-size: 30px; font-weight: 700; color: var(--brass); margin-top: 8px; letter-spacing: 1px;">f/1.4</div>
+<div id="snap-feedback" style="height: 18px; font-size: 11px; letter-spacing: 1px; text-transform: uppercase; margin-top: 4px;"></div>
+
+<div style="display:flex; justify-content: center; gap: 32px; margin: 16px 0 4px;">
+  <div><div class="stat-val" id="snap-score">0</div><div class="stat-label">Sequence</div></div>
+  <div><div class="stat-val" id="snap-best">0</div><div class="stat-label">Best run</div></div>
+</div>
+
+<button id="snap-main" style="margin-top: 10px; width: 100%; background: var(--brass); color: #1A1712; border: none; padding: 13px; border-radius: 10px; font-size: 13px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; cursor: pointer;">Start</button>
+
+<div style="height: 26px; margin-top: 4px;">
+  <button id="snap-stop" class="link-btn" style="display:none;">End session</button>
+</div>
+
+<script>
+(function(){
+  const canvas = document.getElementById('snap-canvas');
+  const ctx = canvas.getContext('2d');
+  const fstopEl = document.getElementById('snap-fstop');
+  const feedbackEl = document.getElementById('snap-feedback');
+  const scoreEl = document.getElementById('snap-score');
+  const bestEl = document.getElementById('snap-best');
+  const mainBtn = document.getElementById('snap-main');
+  const stopBtn = document.getElementById('snap-stop');
+
+  const cx = 140, cy = 140;
+  const outerR = 118;
+  const bezelR = 128;
+  const stops = ['f/1.4','f/2','f/2.8','f/4','f/5.6','f/8','f/11','f/16'];
+  const startAngle = -Math.PI / 2;
+  const targetTolerance = 0.055;
+
+  let score = 0, streak = 0, best = 0;
+  let running = false, sessionActive = false;
+  let fraction = 1, speed = 0, rafId = null;
+  let targetFraction = 0.34;
+
+  function rollTarget() {
+    // keep it within a comfortable band away from the very start/end of the sweep
+    targetFraction = 0.18 + Math.random() * 0.55;
+  }
+
+  function drawBezel() {
+    ctx.strokeStyle = 'rgba(201,162,39,0.25)';
+    ctx.lineWidth = 1;
+    for (let i = 0; i < 40; i++) {
+      const a = (i / 40) * Math.PI * 2;
+      const len = i % 5 === 0 ? 10 : 5;
+      ctx.beginPath();
+      ctx.moveTo(cx + Math.cos(a) * bezelR, cy + Math.sin(a) * bezelR);
+      ctx.lineTo(cx + Math.cos(a) * (bezelR - len), cy + Math.sin(a) * (bezelR - len));
+      ctx.stroke();
+    }
+  }
+
+  function drawTargetWedge() {
+    const a0 = startAngle + (targetFraction - targetTolerance) * Math.PI * 2;
+    const a1 = startAngle + (targetFraction + targetTolerance) * Math.PI * 2;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.arc(cx, cy, outerR, a0, a1);
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(184,80,58,0.22)';
+    ctx.fill();
+  }
+
+  function drawSweep(frac) {
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.arc(cx, cy, outerR, startAngle, startAngle + frac * Math.PI * 2);
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(201,162,39,0.16)';
+    ctx.fill();
+
+    const edgeAngle = startAngle + frac * Math.PI * 2;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.lineTo(cx + Math.cos(edgeAngle) * outerR, cy + Math.sin(edgeAngle) * outerR);
+    ctx.strokeStyle = '#EDE3CC';
+    ctx.lineWidth = 2.5;
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.arc(cx, cy, 4, 0, Math.PI * 2);
+    ctx.fillStyle = '#EDE3CC';
+    ctx.fill();
+  }
+
+  function draw() {
+    ctx.clearRect(0, 0, 280, 280);
+    drawTargetWedge();
+    drawBezel();
+    drawSweep(running ? fraction : 0);
+  }
+
+  function updateFstop(frac) {
+    const idx = Math.min(stops.length - 1, Math.floor(frac * stops.length));
+    fstopEl.textContent = stops[idx];
+  }
+
+  function tick() {
+    if (!running) return;
+    fraction -= speed;
+    if (fraction <= 0) { endAttempt(false); return; }
+    updateFstop(fraction);
+    draw();
+    rafId = requestAnimationFrame(tick);
+  }
+
+  function startSession() {
+    sessionActive = true;
+    score = 0; streak = 0;
+    scoreEl.textContent = score;
+    feedbackEl.textContent = '';
+    rollTarget();
+    startAttempt();
+  }
+
+  function startAttempt() {
+    running = true;
+    fraction = 1;
+    speed = 0.010 + Math.min(streak * 0.0012, 0.018);
+    feedbackEl.textContent = '';
+    refreshButtons();
+    draw();
+    rafId = requestAnimationFrame(tick);
+  }
+
+  function endAttempt(hit) {
+    running = false;
+    cancelAnimationFrame(rafId);
+    if (hit) {
+      score += 10 + streak;
+      streak += 1;
+      best = Math.max(best, streak);
+      feedbackEl.style.color = 'var(--brass)';
+      feedbackEl.textContent = 'in focus';
+    } else {
+      streak = 0;
+      feedbackEl.style.color = 'var(--miss)';
+      feedbackEl.textContent = 'missed focus';
+    }
+    scoreEl.textContent = score;
+    bestEl.textContent = best;
+    rollTarget();
+    draw();
+    refreshButtons();
+  }
+
+  function stopSession() {
+    running = false;
+    sessionActive = false;
+    cancelAnimationFrame(rafId);
+    fraction = 1;
+    feedbackEl.style.color = 'var(--soft)';
+    feedbackEl.textContent = score > 0 ? `ended — score ${score}` : 'ended';
+    fstopEl.textContent = 'f/1.4';
+    draw();
+    refreshButtons();
+  }
+
+  function refreshButtons() {
+    stopBtn.style.display = sessionActive ? 'inline-block' : 'none';
+    if (!sessionActive) { mainBtn.textContent = 'Start'; return; }
+    mainBtn.textContent = running ? 'Snap' : 'Next';
+  }
+
+  function handleMain() {
+    if (!sessionActive) { startSession(); return; }
+    if (running) {
+      const diff = Math.abs(fraction - targetFraction);
+      endAttempt(diff <= targetTolerance);
+    } else {
+      startAttempt();
+    }
+  }
+
+  mainBtn.addEventListener('click', handleMain);
+  canvas.addEventListener('click', () => { if (running) handleMain(); });
+  window.addEventListener('keydown', (e) => {
+    if (e.code === 'Space') { e.preventDefault(); if (running) handleMain(); }
+  });
+  stopBtn.addEventListener('click', stopSession);
+
+  draw();
+})();
+</script>
+</div>
